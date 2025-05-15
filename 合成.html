@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" rel="stylesheet">
+    <title>图片合成（正片叠底）</title>
+    <style>
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #007BFF;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+        #mergedImageContainer img {
+            max-width: 80%;
+            max-height: 60vh;
+            display: block;
+            margin: 0 auto;
+        }
+        #downloadPrompt {
+            text-align: center;
+            margin-top: 10px;
+            color: #333;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen">
+<div class="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+    <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">图片合成（正片叠底）工具</h1>
+    <div class="mb-6">
+        <label for="imageInput" class="block text-gray-700 font-medium mb-2">选择图片</label>
+        <input type="file" id="imageInput" accept="image/*" multiple
+               class="border border-gray-300 p-2 rounded-md w-full focus:outline-none focus:border-blue-500">
+    </div>
+    <div class="flex justify-center space-x-4">
+        <button id="mergeButton"
+                class="bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50 transition duration-300 ease-in-out">
+            合成图片
+        </button>
+        <button id="invertButton"
+                class="bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50 transition duration-300 ease-in-out">
+            反色
+        </button>
+    </div>
+    <div id="loading" class="hidden mt-4 text-center">
+        <div class="loading-spinner mb-2"></div>
+        <p class="text-gray-600">正在合成图片，请稍候...</p>
+    </div>
+    <div id="mergedImageContainer" class="hidden mt-6 text-center">
+        <h2 class="text-lg font-bold text-gray-700 mb-2">合成后的图片</h2>
+        <img id="mergedImage" src="" alt="合成后的图片">
+        <p id="downloadPrompt" style="display: none;">点击下面的链接下载合成后的图片：</p>
+        <a id="downloadLink" style="display: none;" href="#" download="merged_image.png">下载图片</a>
+    </div>
+</div>
+
+<script>
+    const imageInput = document.getElementById('imageInput');
+    const mergeButton = document.getElementById('mergeButton');
+    const invertButton = document.getElementById('invertButton');
+    const loading = document.getElementById('loading');
+    const mergedImageContainer = document.getElementById('mergedImageContainer');
+    const mergedImage = document.getElementById('mergedImage');
+    const downloadPrompt = document.getElementById('downloadPrompt');
+    const downloadLink = document.getElementById('downloadLink');
+
+    mergeButton.addEventListener('click', async () => {
+        const files = imageInput.files;
+        if (files.length === 0) {
+            alert('请选择要合成的图片！');
+            return;
+        }
+
+        loading.classList.remove('hidden');
+        mergeButton.disabled = true;
+
+        try {
+            const firstImage = await loadImage(files[0]);
+            if (!firstImage) throw new Error('第一张图片加载失败');
+
+            const canvas = document.createElement('canvas');
+            canvas.width = firstImage.width;
+            canvas.height = firstImage.height;
+            const ctx = canvas.getContext('2d');
+
+            ctx.drawImage(firstImage, 0, 0);
+            ctx.globalCompositeOperation = 'multiply';
+
+            for (let i = 1; i < files.length; i++) {
+                const image = await loadImage(files[i]);
+                ctx.drawImage(image, 0, 0);
+            }
+
+            const dataURL = canvas.toDataURL('image/png');
+            mergedImage.src = dataURL;
+            mergedImageContainer.classList.remove('hidden');
+            mergedImage.style.display = 'block';
+            downloadPrompt.style.display = 'block';
+            downloadLink.href = dataURL;
+            downloadLink.style.display = 'block';
+
+            // 自动下载
+            const link = document.createElement('a');
+            link.href = dataURL;
+            link.download = 'merged_image.png';
+            document.body.appendChild(link);
+            link.click();
+            setTimeout(() => document.body.removeChild(link), 1000);
+        } catch (error) {
+            alert(`合成图片时出现错误: ${error.message}`);
+            console.error("合成过程中出错:", error);
+        } finally {
+            loading.classList.add('hidden');
+            mergeButton.disabled = false;
+        }
+    });
+
+    invertButton.addEventListener('click', () => {
+        if (!mergedImage.src) {
+            alert("请先合成图片！");
+            return;
+        }
+
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.src = mergedImage.src;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = 255 - data[i];       // R
+                data[i + 1] = 255 - data[i + 1]; // G
+                data[i + 2] = 255 - data[i + 2]; // B
+                // data[i + 3] 为 alpha，不变
+            }
+            ctx.putImageData(imageData, 0, 0);
+            mergedImage.src = canvas.toDataURL('image/png');
+        };
+    });
+
+    async function loadImage(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.onload = () => {
+                URL.revokeObjectURL(img.src);
+                resolve(img);
+            };
+            img.onerror = (err) => reject(err);
+        });
+    }
+</script>
+</body>
+</html>
