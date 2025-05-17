@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>多功能图片合成工具（含加权噪点合成）</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f0f0f0;
+            text-align: center;
+        }
+        #mergedImageContainer img, #resultCanvas {
+            max-width: 80%;
+            max-height: 60vh;
+            display: block;
+            margin: 0 auto 20px;
+            border: 1px solid #ccc;
+        }
+        input, button {
+            font-size: 16px;
+            margin: 5px;
+        }
+        .btn {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .btn:hover {
+            background-color: #2563eb;
+        }
+        .btn:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+<h1>多功能图片合成工具</h1>
+
+<input type="file" id="imageInput" multiple accept="image/*" />
+<br/>
+<div style="margin-top: 10px;">
+    <button id="mergeButton" class="btn">合成图片</button>
+    <button id="invertButton" class="btn">反色</button>
+    <button id="invertMergeButton" class="btn">反色合成图片</button>
+    <button id="brightMergeButton" class="btn">亮度增强合成图片</button>
+    <button id="weightedMergeButton" class="btn">加权合成（智能去噪）</button>
+</div>
+
+<div id="loading" style="display:none; margin-top: 20px;">
+    <p>处理中，请稍候...</p>
+</div>
+
+<div id="mergedImageContainer" style="display:none;">
+    <h2>合成后的图片</h2>
+    <img id="mergedImage" src="" alt="合成结果" />
+</div>
+
+<canvas id="resultCanvas" style="display:none;"></canvas>
+
+<script>
+    const imageInput = document.getElementById('imageInput');
+    const mergeButton = document.getElementById('mergeButton');
+    const invertButton = document.getElementById('invertButton');
+    const invertMergeButton = document.getElementById('invertMergeButton');
+    const brightMergeButton = document.getElementById('brightMergeButton');
+    const weightedMergeButton = document.getElementById('weightedMergeButton');
+
+    const loading = document.getElementById('loading');
+    const mergedImageContainer = document.getElementById('mergedImageContainer');
+    const mergedImage = document.getElementById('mergedImage');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const ctxResult = resultCanvas.getContext('2d');
+
+    function showLoading(show) {
+        loading.style.display = show ? 'block' : 'none';
+    }
+    function showResult(show) {
+        mergedImageContainer.style.display = show ? 'block' : 'none';
+    }
+
+    function loadImage(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
+    function isNoise(r, g, b, a) {
+        const threshold = 250;
+        return a < 10 || (r > threshold && g > threshold && b > threshold);
+    }
+
+    // 反色函数
+    function invertImage(image) {
+        return new Promise((resolve) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.width;
+            canvas.height = image.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = 255 - data[i];
+                data[i + 1] = 255 - data[i + 1];
+                data[i + 2] = 255 - data[i + 2];
+            }
+            ctx.putImageData(imageData, 0, 0);
+
+            const resultImg = new Image();
+            resultImg.onload = () => resolve(resultImg);
+            resultImg.src = canvas.toDataURL('image/png');
+        });
+    }
+
+    // 亮度增强函数
+    function brightenImage(image, width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0, width, height);
+
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = Math.min(data[i] + 40, 255);
+            data[i + 1] = Math.min(data[i + 1] + 40, 255);
+            data[i + 2] = Math.min(data[i + 2] + 40, 255);
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        return new Promise((resolve) => {
+            const resultImg = new Image();
+            resultImg.onload = () => resolve(resultImg);
+            resultImg.src = canvas.toDataURL('image/png');
+        });
+    }
+
+    // 绘制白底再画图，防止全黑
+    function drawWithWhiteBackground(ctx, image, width, height) {
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(image, 0, 0, width, height);
+    }
+
+    // 简单 multiply 合成
+    async function simpleMultiplyMerge(files) {
+        const firstImage = await loadImage(files[0]);
+        const width = firstImage.width;
+        const height = firstImage.height;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        drawWithWhiteBackground(ctx, firstImage, width, height);
+        ctx.globalCompositeOperation = 'multiply';
+
+        for (let i = 1; i < files.length; i++) {
+            const img = await loadImage(files[i]);
+            drawWithWhiteBackground(ctx, img, width, height);
+        }
+
+        return canvas.toDataURL('image/png');
+    }
+
+    // 反色合成
+    async function invertMerge(files) {
+        const firstImage = await loadImage(files[0]);
+        const invertedFirst = await invertImage(firstImage);
+        const width = invertedFirst.width;
+        const height = invertedFirst.height;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        drawWithWhiteBackground(ctx, invertedFirst, width, height);
+        ctx.globalCompositeOperation = 'multiply';
+
+        for (let i = 1; i < files.length; i++) {
+            const img = await loadImage(files[i]);
+            const inverted = await invertImage(img);
+            drawWithWhiteBackground(ctx, inverted, width, height);
+        }
+
+        return canvas.toDataURL('image/png');
+    }
+
+    // 亮度增强合成
+    async function brightMerge(files) {
+        const firstImage = await loadImage(files[0]);
+        const brightFirst = await brightenImage(firstImage, firstImage.width, firstImage.height);
+        const width = brightFirst.width;
+        const height = brightFirst.height;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        drawWithWhiteBackground(ctx, brightFirst, width, height);
+        ctx.globalCompositeOperation = 'overlay';
+
+        for (let i = 1; i < files.length; i++) {
+            const img = await loadImage(files[i]);
+            const bright = await brightenImage(img, width, height);
+            ctx.drawImage(bright, 0, 0);
+        }
+
+        return canvas.toDataURL('image/png');
+    }
+
+    // 加权合成（智能去噪）
+    async function weightedMerge(files) {
+        const images = [];
+        for (const file of files) {
+            images.push(await loadImage(file));
+        }
+
+        const width = images[0].width;
+        const height = images[0].height;
+
+        resultCanvas.width = width;
+        resultCanvas.height = height;
+
+        // 获取所有图片 ImageData
+        const imageDatas = [];
+        for (const img of images) {
+            const tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = width;
+            tmpCanvas.height = height;
+            const tmpCtx = tmpCanvas.getContext('2d');
+            tmpCtx.drawImage(img, 0, 0, width, height);
+            imageDatas.push(tmpCtx.getImageData(0, 0, width, height));
+        }
+
+        const outputData = ctxResult.createImageData(width, height);
+
+        for (let i = 0; i < width * height * 4; i += 4) {
+            let rSum = 0, gSum = 0, bSum = 0, aSum = 0, count = 0;
+
+            for (const imgData of imageDatas) {
+                const r = imgData.data[i];
+                const g = imgData.data[i + 1];
+                const b = imgData.data[i + 2];
+                const a = imgData.data[i + 3];
+                if (!isNoise(r, g, b, a)) {
+                    rSum += r;
+                    gSum += g;
+                    bSum += b;
+                    aSum += a;
+                    count++;
+                }
+            }
+
+            if (count > 0) {
+                outputData.data[i] = Math.round(rSum / count);
+                outputData.data[i + 1] = Math.round(gSum / count);
+                outputData.data[i + 2] = Math.round(bSum / count);
+                outputData.data[i + 3] = Math.round(aSum / count);
+            } else {
+                // 全噪点设透明
+                outputData.data[i] = 255;
+                outputData.data[i + 1] = 255;
+                outputData.data[i + 2] = 255;
+                outputData.data[i + 3] = 0;
+            }
+        }
+
+        ctxResult.putImageData(outputData, 0, 0);
+
+        return resultCanvas.toDataURL('image/png');
+    }
+
+    async function runMerge(mergeFunc) {
+        const files = imageInput.files;
+        if (files.length === 0) {
+            alert('请选择至少一张图片');
+            return;
+        }
+        showLoading(true);
+        try {
+            const dataURL = await mergeFunc(files);
+            mergedImage.src = dataURL;
+            showResult(true);
+        } catch (e) {
+            alert('合成出错：' + e.message);
+            console.error(e);
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    mergeButton.onclick = () => runMerge(simpleMultiplyMerge);
+    invertButton.onclick = () => {
+        if (!mergedImage.src) return alert("请先合成图片！");
+        // 反色合成结果
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.src = mergedImage.src;
+        img.onload = () => {
+            const canvas2 = document.createElement('canvas');
+            canvas2.width = img.width;
+            canvas2.height = img.height;
+            const ctx2 = canvas2.getContext('2d');
+            ctx2.drawImage(img, 0, 0);
+
+            const imageData = ctx2.getImageData(0, 0, canvas2.width, canvas2.height);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = 255 - data[i];
+                data[i + 1] = 255 - data[i + 1];
+                data[i + 2] = 255 - data[i + 2];
+            }
+            ctx2.putImageData(imageData, 0, 0);
+            mergedImage.src = canvas2.toDataURL('image/png');
+        };
+    };
+    invertMergeButton.onclick = () => runMerge(invertMerge);
+    brightMergeButton.onclick = () => runMerge(brightMerge);
+    weightedMergeButton.onclick = () => runMerge(weightedMerge);
+
+    function showLoading(show) {
+        loading.style.display = show ? 'block' : 'none';
+    }
+    function showResult(show) {
+        mergedImageContainer.style.display = show ? 'block' : 'none';
+    }
+</script>
+
+</body>
+</html>
